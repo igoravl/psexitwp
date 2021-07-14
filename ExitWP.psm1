@@ -14,8 +14,7 @@ Function ConvertTo-JekyllBlog {
 
         #Encoding of wordpress.xml file. Defaults to UTF8
         [Parameter()]
-        [Microsoft.PowerShell.Commands.FileSystemCmdletProviderEncoding]
-        $Encoding = [Microsoft.PowerShell.Commands.FileSystemCmdletProviderEncoding]::UTF8,
+        $Encoding = 'UTF8',
 
         #Path to output directory for post files
         [Parameter()]
@@ -26,6 +25,11 @@ Function ConvertTo-JekyllBlog {
         [Parameter()]
         [string[]]
         $ContentTypes = @('post'),
+
+        # Limits exporting to posts in the specified language. If omitted, all posts are included.
+        [Parameter()]
+        [string[]]
+        $Language,
 
         # Specifies whether images should be downloaded
         [Parameter()]
@@ -43,6 +47,11 @@ Function ConvertTo-JekyllBlog {
         [ValidateSet('AssetsFolder', 'PostFolder')]
         [string]
         $AttachmentDestination = 'PostFolder',
+
+        #Specifies whether draft posts should be excluded from exporting
+        [Parameter()]
+        [switch]
+        $ExcludeDrafts,
 
         #Forces the command to run without asking for user confirmation
         [Parameter()]
@@ -70,9 +79,19 @@ Function ConvertTo-JekyllBlog {
 
         foreach($postXml in ($xml.rss.channel.item | Where-Object {$_.post_type.InnerText -in $ContentTypes}))
         {
+            if($Language)
+            {
+                $lang = $postXml.SelectNodes("category[@domain='language']/@nicename").Value
+
+                if ($lang -and ($Language -notcontains $lang))
+                {
+                    continue
+                }
+            }
+
             $post = ConvertTo-PostObject $postXml
 
-            if($post.status -eq 'draft') { continue }
+            if(($post.status -eq 'draft') -and ($ExcludeDrafts.IsPresent)) { continue }
 
             Export-Post $post $DestinationPath
 
@@ -109,6 +128,7 @@ Function ConvertTo-PostObject($inputObject)
         format = $OutputFormat
         excerpt = $inputObject.encoded[1].InnerText
         imageSources = Get-ImageSources $inputContents
+        image = Get-FeaturedImage $inputObject
         XmlElement = $inputObject
     }
 
@@ -160,19 +180,21 @@ Function Get-ImageSources($html)
     try
     {
         $doc = [HtmlAgilityPack.HtmlDocument]::new()
-        $doc.LoadHtml($inputContents)
+        $doc.LoadHtml($html)
         
         return $doc.DocumentNode.SelectNodes('//img[@src]') | ForEach-Object { 
-            [PSCustomObject] @{
-                OriginalUrl = $_.Attributes['src'].Value
-                Url = Get-LocalImageUrl $_.Attributes['src'].Value
-                FilePath = Get-LocalImageFilePath $_.Attributes['src'].Value $AttachmentDestination
+            if($_) {
+                [PSCustomObject] @{
+                    OriginalUrl = $_.Attributes['src'].Value
+                    Url = Get-LocalImageUrl $_.Attributes['src'].Value
+                    FilePath = Get-LocalImageFilePath $_.Attributes['src'].Value $AttachmentDestination
+                }
             }
         }
     }
     catch
     {
-        Write-Warning "Error parsing HTML: $_.Exception"
+        Write-Warning "Error parsing HTML: $($_.Exception)"
     }
 }
 
@@ -194,4 +216,21 @@ Function Get-OutputDirectory($Path)
     }
 
     return Resolve-Path $Path
+}
+
+Function Get-FeaturedImage($inputObject)
+{
+    if (-not $inputObject)
+    {
+        return ''
+    }
+
+    try
+    {
+        Write-Output $inputObject
+    }
+    catch
+    {
+        Write-Warning "Error parsing HTML: $($_.Exception)"
+    }        
 }
